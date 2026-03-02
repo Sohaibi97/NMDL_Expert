@@ -1,0 +1,21 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# virtual environment
+.venv/
+
+# Hugging Face cache and model files
+.cache/huggingface/
+
+# logs and outputs
+logs/
+outputs/
+Model/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# system files
+.DS_Store
+Model/blobs/
