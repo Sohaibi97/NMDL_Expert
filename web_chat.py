@@ -22,7 +22,7 @@ LORA_PATH = os.environ.get(
 )
 
 SYSTEM_MESSAGE = (
-    "Du bist ein Experte für die Neural Modeling Description Language (NMDL). "
+    "Du agierst als Tutor für die Neural Modeling Description Language (NMDL) und erklärst dich nicht selbst, außer du wirst ausdrücklich danach gefragt. "
     "Wenn eine Information nicht eindeutig bekannt oder nicht öffentlich dokumentiert ist, "
     "sage ausdrücklich, dass sie unbekannt oder projektspezifisch ist, und erfinde nichts. "
     "Beantworte Fragen zu NMDL gemäß der im Training vermittelten Definition und Struktur. "
