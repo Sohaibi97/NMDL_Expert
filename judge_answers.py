@@ -19,13 +19,13 @@ import re
 from typing import Any, Dict, List, Tuple, Optional
 
 import torch
-from transformers import Mistral3ForConditionalGeneration, AutoTokenizer
+from transformers import Mistral3ForConditionalGeneration, AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
 # --- Offline erzwingen (HPC ohne Internet) ---
 os.environ["TRANSFORMERS_OFFLINE"] = os.environ.get("TRANSFORMERS_OFFLINE", "1")
 
-# ===== Pfade (Defaults passend zu deinem Setup; kannst du per ENV überschreiben) =====
+# ===== Pfade (Wo die Testdaten und Ergebnisse gespeichert werden) =====
 TEST_DIR = os.environ.get("TEST_DIR", "Test_data")
 
 CANDIDATE_BASE_MODEL_PATH = os.environ.get(
@@ -39,7 +39,7 @@ CANDIDATE_LORA_PATH = os.environ.get(
 
 JUDGE_MODEL_PATH = os.environ.get(
     "JUDGE_MODEL_PATH",
-    "/home/khamlichi/.cache/huggingface/hub/models--mistralai--Ministral-3-3B-Instruct-2512-BF16/snapshots/ecc3ba8b43a45610e709327c049d24b009bfec88",
+    "/home/khamlichi/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554",
 )
 
 OUT_DIR = os.environ.get("OUT_DIR", "judge_outputs")
@@ -63,8 +63,8 @@ Stil, Länge, Höflichkeit sind irrelevant.
 WICHTIG:
 - Inhalt vor Wortlaut: Paraphrasen sind OK, solange der Sachverhalt korrekt ist.
 - Aber: Fachbegriffe, Eigennamen und definierte Bezeichnungen müssen präzise korrekt sein.
-- Wissenslücke: Wenn die gesuchte Information fehlt und nur generisch ausgewichen wird -> Wissenslücke = true.
-- Halluzination: Wenn eine konkrete, aber falsche Information behauptet wird -> halluzination = true (und error_level nicht "keine").
+- Wissensluecke: beschreibt die Stärke der Lücke; "keine" bedeutet keine Lücke (bestmöglich), "erhebliche" bedeutet starke Lücke (schlechtestmöglich).
+- Konkrete falsche Behauptungen spiegeln sich in error_level ("einige" oder "dominant") wider.
 
 ZUSATZINFORMATIONEN:
 - Korrekte Zusatzinformationen dürfen NIEMALS die coverage oder error_level verschlechtern.
@@ -80,8 +80,7 @@ AUSGABE-FELDER (nur diese Keys, exakt):
   "coverage": "voll|ueberwiegend|teilweise|einzelne|kein_bezug",
   "term_precision": "korrekt|leicht_ungenau|fehlerhaft_oder_fehlend",
   "error_level": "keine|klein|einige|dominant",
-  "wissensluecke": true|false,
-  "halluzination": true|false,
+  "wissensluecke": "keine|kleine|grosse|erhebliche",
   "begruendung": "max. 2 Sätze, kurz und konkret"
 }
 
@@ -101,6 +100,11 @@ REGELN ZUR WAHL DER KLASSEN:
   - klein: kleine Fehler/Unschärfen, Kernaussage korrekt
   - einige: mehrere Fehler oder relevante Fehler
   - dominant: Fehler dominieren, Aussage überwiegend falsch
+- wissensluecke:
+  - keine: Antwort zeigt solides Verständnis, keine erkennbaren Lücken
+  - kleine: Randaspekte fehlen oder sind oberflächlich, Kernverständnis vorhanden
+  - grosse: wesentliche Konzepte fehlen oder werden falsch verstanden
+  - erhebliche: fundamentales Verständnis fehlt, nur Bruchstücke erkennbar
 """
 
 # ===== Hilfsfunktionen =====
@@ -141,41 +145,41 @@ def _safe_json_loads(s: str) -> Optional[Dict[str, Any]]:
 
 
 def map_judge_to_note(j: Dict[str, Any]) -> Tuple[int, int]:
-    """
-    Deterministische Note/Punkte (wie in deiner Skala):
-      Note 1..6  <-> Punkte 5..0  (punkte = 6 - note)
-    """
-    coverage = j.get("coverage")
-    term_precision = j.get("term_precision")
-    error_level = j.get("error_level")
-    wissensluecke = bool(j.get("wissensluecke"))
-    halluzination = bool(j.get("halluzination"))
+    # Punktetabellen für die Klassifikationen
+    COVERAGE_POINTS = {
+        "voll": 5, "ueberwiegend": 4, "teilweise": 3, "einzelne": 2, "kein_bezug": 0
+    }
+    TERM_POINTS = {
+        "korrekt": 5, "leicht_ungenau": 3, "fehlerhaft_oder_fehlend": 0
+    }
+    ERROR_POINTS = {
+        "keine": 5, "klein": 3, "einige": 1, "dominant": 0
+    }
+    WISS_POINTS = {
+        "keine": 5, "kleine": 3, "grosse": 1, "erhebliche": 0
+    }
 
-    # Note 6 sofort bei Wissenslücke oder kein Bezug
-    if wissensluecke or coverage == "kein_bezug":
-        note = 6
-    else:
-        # Basisnote
-        if coverage == "voll" and term_precision == "korrekt" and error_level == "keine":
-            note = 1
-        elif coverage in ("voll", "ueberwiegend") and error_level in ("keine", "klein") and term_precision in ("korrekt", "leicht_ungenau"):
-            note = 2
-        elif coverage == "teilweise" and error_level in ("keine", "klein", "einige"):
-            note = 3
-        elif coverage == "einzelne":
-            note = 4 if error_level in ("keine", "klein", "einige") else 5
-        else:
-            note = 5
+    coverage = j.get("coverage", "kein_bezug")
+    term_precision = j.get("term_precision", "fehlerhaft_oder_fehlend")
+    error_level = j.get("error_level", "dominant")
+    wissensluecke = j.get("wissensluecke", "erhebliche")
 
-        # wichtige Begriffe falsch/fehlen => keine Top-Noten
-        if term_precision == "fehlerhaft_oder_fehlend":
-            note = max(note, 3)
+    # Wenn kein Bezug: direkt 0 Punkte / Note 6
+    if coverage == "kein_bezug":
+        return 6, 0
 
-        # Halluzinations-Penalty: mindestens 1 Stufe schlechter
-        if halluzination:
-            note = min(6, note + 1)
+    c = COVERAGE_POINTS.get(coverage, 0)
+    t = TERM_POINTS.get(term_precision, 0)
+    e = ERROR_POINTS.get(error_level, 0)
+    w = WISS_POINTS.get(wissensluecke, 0)
 
-    punkte = max(0, 6 - note)
+    total = c + t + e + w
+    total_max = 5 + 5 + 5 + 5
+
+    punkte = int(round((total / total_max) * 5))
+    punkte = max(0, min(5, punkte))
+
+    note = 6 - punkte
     return note, punkte
 
 
@@ -242,11 +246,10 @@ def judge_answer(judge_model, judge_tokenizer, question: str, expected: str, can
         # Fallback: maximal streng => Note 6
         parsed = {
             "coverage": "kein_bezug",
-            "term_precision": "fehlerhaft_oder_fehlend",
-            "error_level": "dominant",
-            "wissensluecke": True,
-            "halluzination": False,
-            "begruendung": "Judge-Ausgabe war kein gültiges JSON.",
+        "term_precision": "fehlerhaft_oder_fehlend",
+        "error_level": "dominant",
+        "wissensluecke": "erhebliche",
+        "begruendung": "Judge-Ausgabe war kein gültiges JSON.",
         }
 
     note, punkte = map_judge_to_note(parsed)
@@ -272,17 +275,19 @@ if not torch.cuda.is_available():
     candidate_model.to("cpu")
 
 print("🚀 Lade Judge (ohne LoRA) ...")
-judge_tokenizer = AutoTokenizer.from_pretrained(JUDGE_MODEL_PATH, local_files_only=True, use_fast=True)
+#judge_tokenizer = AutoTokenizer.from_pretrained(JUDGE_MODEL_PATH, local_files_only=True, use_fast=True)
+judge_tokenizer = AutoTokenizer.from_pretrained(JUDGE_MODEL_PATH, local_files_only=True, use_fast=True, trust_remote_code=True)
 if judge_tokenizer.pad_token is None:
     judge_tokenizer.pad_token = judge_tokenizer.eos_token
 
-judge_model = Mistral3ForConditionalGeneration.from_pretrained(
+judge_model = AutoModelForCausalLM.from_pretrained(
     JUDGE_MODEL_PATH,
     device_map={"": 0} if torch.cuda.is_available() else None,
     torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
     local_files_only=True,
     trust_remote_code=True,
 )
+
 judge_model.eval()
 if not torch.cuda.is_available():
     judge_model.to("cpu")
@@ -355,8 +360,7 @@ for fp in paths:
                 "coverage": parsed.get("coverage"),
                 "term_precision": parsed.get("term_precision"),
                 "error_level": parsed.get("error_level"),
-                "wissensluecke": bool(parsed.get("wissensluecke")),
-                "halluzination": bool(parsed.get("halluzination")),
+                "wissensluecke": parsed.get("wissensluecke"),
             }
             flog.write(json.dumps(log_rec, ensure_ascii=False) + "\n")
 

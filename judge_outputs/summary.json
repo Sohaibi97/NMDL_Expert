@@ -1,22 +1,22 @@
 {
   "Taxonomie1": {
     "count": 42,
-    "avg_note": 3.238095238095238,
-    "avg_punkte": 2.761904761904762,
+    "avg_note": 2.619047619047619,
+    "avg_punkte": 3.380952380952381,
     "out_file": "judge_outputs/Taxonomie1_judge.jsonl",
     "log_file": "judge_logs/Taxonomie1_scores.jsonl"
   },
   "Taxonomie2": {
     "count": 43,
-    "avg_note": 2.86046511627907,
-    "avg_punkte": 3.13953488372093,
+    "avg_note": 2.3255813953488373,
+    "avg_punkte": 3.6744186046511627,
     "out_file": "judge_outputs/Taxonomie2_judge.jsonl",
     "log_file": "judge_logs/Taxonomie2_scores.jsonl"
   },
   "Taxonomie3": {
     "count": 15,
-    "avg_note": 3.8666666666666667,
-    "avg_punkte": 2.1333333333333333,
+    "avg_note": 2.933333333333333,
+    "avg_punkte": 3.066666666666667,
     "out_file": "judge_outputs/Taxonomie3_judge.jsonl",
     "log_file": "judge_logs/Taxonomie3_scores.jsonl"
   }

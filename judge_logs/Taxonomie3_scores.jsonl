@@ -1,15 +1,15 @@
-{"taxonomie": "Taxonomie3", "index": 1, "note": 3, "punkte": 3, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "klein", "wissensluecke": false, "halluzination": false}
-{"taxonomie": "Taxonomie3", "index": 2, "note": 6, "punkte": 0, "coverage": "teilweise", "term_precision": "fehlerhaft_oder_fehlend", "error_level": "dominant", "wissensluecke": false, "halluzination": true}
-{"taxonomie": "Taxonomie3", "index": 3, "note": 6, "punkte": 0, "coverage": "teilweise", "term_precision": "fehlerhaft_oder_fehlend", "error_level": "dominant", "wissensluecke": false, "halluzination": true}
-{"taxonomie": "Taxonomie3", "index": 4, "note": 6, "punkte": 0, "coverage": "teilweise", "term_precision": "fehlerhaft_oder_fehlend", "error_level": "dominant", "wissensluecke": false, "halluzination": true}
-{"taxonomie": "Taxonomie3", "index": 5, "note": 3, "punkte": 3, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "klein", "wissensluecke": false, "halluzination": false}
-{"taxonomie": "Taxonomie3", "index": 6, "note": 6, "punkte": 0, "coverage": "teilweise", "term_precision": "fehlerhaft_oder_fehlend", "error_level": "dominant", "wissensluecke": false, "halluzination": true}
-{"taxonomie": "Taxonomie3", "index": 7, "note": 3, "punkte": 3, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "klein", "wissensluecke": false, "halluzination": false}
-{"taxonomie": "Taxonomie3", "index": 8, "note": 3, "punkte": 3, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "klein", "wissensluecke": false, "halluzination": false}
-{"taxonomie": "Taxonomie3", "index": 9, "note": 3, "punkte": 3, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "klein", "wissensluecke": false, "halluzination": false}
-{"taxonomie": "Taxonomie3", "index": 10, "note": 1, "punkte": 5, "coverage": "voll", "term_precision": "korrekt", "error_level": "keine", "wissensluecke": false, "halluzination": false}
-{"taxonomie": "Taxonomie3", "index": 11, "note": 3, "punkte": 3, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "klein", "wissensluecke": false, "halluzination": false}
-{"taxonomie": "Taxonomie3", "index": 12, "note": 3, "punkte": 3, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "klein", "wissensluecke": false, "halluzination": false}
-{"taxonomie": "Taxonomie3", "index": 13, "note": 3, "punkte": 3, "coverage": "teilweise", "term_precision": "korrekt", "error_level": "klein", "wissensluecke": false, "halluzination": false}
-{"taxonomie": "Taxonomie3", "index": 14, "note": 6, "punkte": 0, "coverage": "einzelne", "term_precision": "fehlerhaft_oder_fehlend", "error_level": "dominant", "wissensluecke": false, "halluzination": true}
-{"taxonomie": "Taxonomie3", "index": 15, "note": 3, "punkte": 3, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "klein", "wissensluecke": false, "halluzination": false}
+{"taxonomie": "Taxonomie3", "index": 1, "note": 4, "punkte": 2, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "einige", "wissensluecke": "grobe"}
+{"taxonomie": "Taxonomie3", "index": 2, "note": 4, "punkte": 2, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "einige", "wissensluecke": "grobe"}
+{"taxonomie": "Taxonomie3", "index": 3, "note": 4, "punkte": 2, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "einige", "wissensluecke": "große"}
+{"taxonomie": "Taxonomie3", "index": 4, "note": 4, "punkte": 2, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "einige", "wissensluecke": "grobe"}
+{"taxonomie": "Taxonomie3", "index": 5, "note": 3, "punkte": 3, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "klein", "wissensluecke": "kleine"}
+{"taxonomie": "Taxonomie3", "index": 6, "note": 4, "punkte": 2, "coverage": "teilweise", "term_precision": "leicht_ungenau", "error_level": "einige", "wissensluecke": "grobe"}
+{"taxonomie": "Taxonomie3", "index": 7, "note": 2, "punkte": 4, "coverage": "voll", "term_precision": "korrekt", "error_level": "keine", "wissensluecke": "keine"}
+{"taxonomie": "Taxonomie3", "index": 8, "note": 2, "punkte": 4, "coverage": "voll", "term_precision": "korrekt", "error_level": "keine", "wissensluecke": "keine"}
+{"taxonomie": "Taxonomie3", "index": 9, "note": 1, "punkte": 5, "coverage": "ueberwiegend", "term_precision": "korrekt", "error_level": "keine", "wissensluecke": "kleine"}
+{"taxonomie": "Taxonomie3", "index": 10, "note": 2, "punkte": 4, "coverage": "voll", "term_precision": "korrekt", "error_level": "keine", "wissensluecke": "keine"}
+{"taxonomie": "Taxonomie3", "index": 11, "note": 2, "punkte": 4, "coverage": "ueberwiegend", "term_precision": "leicht_ungenau", "error_level": "klein", "wissensluecke": "kleine"}
+{"taxonomie": "Taxonomie3", "index": 12, "note": 2, "punkte": 4, "coverage": "voll", "term_precision": "korrekt", "error_level": "keine", "wissensluecke": "keine"}
+{"taxonomie": "Taxonomie3", "index": 13, "note": 2, "punkte": 4, "coverage": "voll", "term_precision": "korrekt", "error_level": "keine", "wissensluecke": "keine"}
+{"taxonomie": "Taxonomie3", "index": 14, "note": 6, "punkte": 0, "coverage": "kein_bezug", "term_precision": "fehlerhaft_oder_fehlend", "error_level": "dominant", "wissensluecke": "erhebliche"}
+{"taxonomie": "Taxonomie3", "index": 15, "note": 2, "punkte": 4, "coverage": "voll", "term_precision": "korrekt", "error_level": "keine", "wissensluecke": "keine"}
