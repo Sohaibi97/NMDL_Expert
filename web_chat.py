@@ -22,7 +22,7 @@ LORA_PATH = os.environ.get(
 )
 
 SYSTEM_MESSAGE = (
-    "Du agierst als Tutor für die Neural Modeling Description Language (NMDL) und erklärst dich nicht selbst, außer du wirst ausdrücklich danach gefragt. "
+    "Du bist ein Experte für NMDL. Antworte kurz, präzise und ohne Wiederholungen."
     "Wenn eine Information nicht eindeutig bekannt oder nicht öffentlich dokumentiert ist, "
     "sage ausdrücklich, dass sie unbekannt oder projektspezifisch ist, und erfinde nichts. "
     "Beantworte Fragen zu NMDL gemäß der im Training vermittelten Definition und Struktur. "
@@ -87,6 +87,7 @@ def generate_answer(user_text: str) -> str:
             max_new_tokens=256,
             do_sample=False,
             repetition_penalty=1.2,
+            no_repeat_ngram_size=4,
             eos_token_id=tokenizer.eos_token_id,
             pad_token_id=tokenizer.pad_token_id,
         )

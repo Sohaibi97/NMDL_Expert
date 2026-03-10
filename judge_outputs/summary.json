@@ -1,23 +1,76 @@
 {
-  "Taxonomie1": {
-    "count": 42,
-    "avg_note": 2.619047619047619,
-    "avg_punkte": 3.380952380952381,
-    "out_file": "judge_outputs/Taxonomie1_judge.jsonl",
-    "log_file": "judge_logs/Taxonomie1_scores.jsonl"
+  "base_model": {
+    "Taxonomie1": {
+      "count": 40,
+      "avg_note": 5.375,
+      "avg_punkte": 0.625,
+      "out_file": "judge_outputs/Taxonomie1_judge_base.jsonl",
+      "log_file": "judge_logs/Taxonomie1_scores_base.jsonl"
+    },
+    "Taxonomie2": {
+      "count": 38,
+      "avg_note": 5.157894736842105,
+      "avg_punkte": 0.8421052631578947,
+      "out_file": "judge_outputs/Taxonomie2_judge_base.jsonl",
+      "log_file": "judge_logs/Taxonomie2_scores_base.jsonl"
+    },
+    "Taxonomie3": {
+      "count": 14,
+      "avg_note": 5.571428571428571,
+      "avg_punkte": 0.42857142857142855,
+      "out_file": "judge_outputs/Taxonomie3_judge_base.jsonl",
+      "log_file": "judge_logs/Taxonomie3_scores_base.jsonl"
+    }
   },
-  "Taxonomie2": {
-    "count": 43,
-    "avg_note": 2.3255813953488373,
-    "avg_punkte": 3.6744186046511627,
-    "out_file": "judge_outputs/Taxonomie2_judge.jsonl",
-    "log_file": "judge_logs/Taxonomie2_scores.jsonl"
+  "fine_tuned_model": {
+    "Taxonomie1": {
+      "count": 40,
+      "avg_note": 3.575,
+      "avg_punkte": 2.425,
+      "out_file": "judge_outputs/Taxonomie1_judge_ft.jsonl",
+      "log_file": "judge_logs/Taxonomie1_scores_ft.jsonl"
+    },
+    "Taxonomie2": {
+      "count": 38,
+      "avg_note": 3.1315789473684212,
+      "avg_punkte": 2.8684210526315788,
+      "out_file": "judge_outputs/Taxonomie2_judge_ft.jsonl",
+      "log_file": "judge_logs/Taxonomie2_scores_ft.jsonl"
+    },
+    "Taxonomie3": {
+      "count": 14,
+      "avg_note": 3.2142857142857144,
+      "avg_punkte": 2.7857142857142856,
+      "out_file": "judge_outputs/Taxonomie3_judge_ft.jsonl",
+      "log_file": "judge_logs/Taxonomie3_scores_ft.jsonl"
+    }
   },
-  "Taxonomie3": {
-    "count": 15,
-    "avg_note": 2.933333333333333,
-    "avg_punkte": 3.066666666666667,
-    "out_file": "judge_outputs/Taxonomie3_judge.jsonl",
-    "log_file": "judge_logs/Taxonomie3_scores.jsonl"
+  "vergleich": {
+    "Taxonomie1": {
+      "delta_punkte_ft_minus_base": 1.7999999999999998,
+      "besseres_modell_punkte": "fine_tuned"
+    },
+    "Taxonomie2": {
+      "delta_punkte_ft_minus_base": 2.026315789473684,
+      "besseres_modell_punkte": "fine_tuned"
+    },
+    "Taxonomie3": {
+      "delta_punkte_ft_minus_base": 2.357142857142857,
+      "besseres_modell_punkte": "fine_tuned"
+    }
+  },
+  "gesamt": {
+    "base_model": {
+      "count": 92,
+      "avg_punkte": 0.6847826086956522
+    },
+    "fine_tuned_model": {
+      "count": 92,
+      "avg_punkte": 2.6630434782608696
+    },
+    "vergleich": {
+      "delta_punkte_ft_minus_base": 1.9782608695652173,
+      "besseres_modell_punkte": "fine_tuned"
+    }
   }
 }

@@ -4,28 +4,40 @@
 # Erwartet Testdaten in:  Test_data/*.jsonl
 # Jede Zeile: {"messages":[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}
 # => "assistant" wird als Erwartungshorizont (Referenz) genutzt.
-# Das Script generiert eine Candidate-Antwort mit deinem finetuned Modell
-# und lässt ein separates Judge-Modell streng bewerten.
+#
+# Das Script testet:
+# 1) Base Model ohne Fine-Tuning
+# 2) Fine-Tuned Model (Base + LoRA)
+#
+# Für jede Frage werden beide Modelle bewertet und getrennt geloggt.
 #
 # Outputs:
-# - judge_outputs/<Taxonomie>_judge.jsonl    (voller Record inkl. Judge-JSON + Note/Punkte)
-# - judge_logs/<Taxonomie>_scores.jsonl      (kompakte Logs je Frage: Note/Punkte + Klassifikationen)
-# - judge_outputs/summary.json               (Durchschnittsnote je Taxonomie)
+# - judge_outputs/<Taxonomie>_judge_base.jsonl
+# - judge_outputs/<Taxonomie>_judge_ft.jsonl
+# - judge_logs/<Taxonomie>_scores_base.jsonl
+# - judge_logs/<Taxonomie>_scores_ft.jsonl
+# - judge_outputs/summary.json
 
 import os
 import json
 import glob
-import re
 from typing import Any, Dict, List, Tuple, Optional
 
 import torch
-from transformers import Mistral3ForConditionalGeneration, AutoTokenizer, AutoModelForCausalLM
+from transformers import (
+    Mistral3ForConditionalGeneration,
+    AutoTokenizer,
+    AutoModelForCausalLM,
+)
 from peft import PeftModel
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 # --- Offline erzwingen (HPC ohne Internet) ---
 os.environ["TRANSFORMERS_OFFLINE"] = os.environ.get("TRANSFORMERS_OFFLINE", "1")
 
-# ===== Pfade (Wo die Testdaten und Ergebnisse gespeichert werden) =====
+# ===== Pfade =====
 TEST_DIR = os.environ.get("TEST_DIR", "Test_data")
 
 CANDIDATE_BASE_MODEL_PATH = os.environ.get(
@@ -44,17 +56,18 @@ JUDGE_MODEL_PATH = os.environ.get(
 
 OUT_DIR = os.environ.get("OUT_DIR", "judge_outputs")
 LOG_DIR = os.environ.get("LOG_DIR", "judge_logs")
+PLOT_DIR = os.environ.get("PLOT_DIR", "judge_plots")
 
 os.makedirs(OUT_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
-
-# ===== Candidate System Prompt (für Generierung) =====
+os.makedirs(PLOT_DIR, exist_ok=True)
+# ===== Candidate System Prompt =====
 CANDIDATE_SYSTEM = os.environ.get(
     "CANDIDATE_SYSTEM",
     "Du bist ein Experte für NMDL. Beantworte präzise und fachlich korrekt."
 )
 
-# ===== Strenger Judge Prompt (Klassifikationen + JSON-only) =====
+# ===== Judge Prompt =====
 JUDGE_PROMPT = """Du bist ein strenger, objektiver Bewertungsassistent.
 Du vergleichst eine MODELL-ANTWORT mit einem ERWARTUNGSHORIZONT (Ground Truth).
 Bewertet wird ausschließlich die MODELL-ANTWORT: sachliche Korrektheit und Abdeckung der Kerninhalte.
@@ -62,49 +75,39 @@ Stil, Länge, Höflichkeit sind irrelevant.
 
 WICHTIG:
 - Inhalt vor Wortlaut: Paraphrasen sind OK, solange der Sachverhalt korrekt ist.
-- Aber: Fachbegriffe, Eigennamen und definierte Bezeichnungen müssen präzise korrekt sein.
-- Wissensluecke: beschreibt die Stärke der Lücke; "keine" bedeutet keine Lücke (bestmöglich), "erhebliche" bedeutet starke Lücke (schlechtestmöglich).
-- Konkrete falsche Behauptungen spiegeln sich in error_level ("einige" oder "dominant") wider.
-
-ZUSATZINFORMATIONEN:
-- Korrekte Zusatzinformationen dürfen NIEMALS die coverage oder error_level verschlechtern.
-- Setze coverage="voll", sobald alle Kerninhalte aus dem Erwartungshorizont vorhanden sind – auch wenn mehr erklärt wird.
-- Setze error_level nur bei tatsächlichen sachlichen Fehlern oder Widersprüchen (nicht bei „zu viel Kontext“).
-- Unklare Zusatzbegriffe (z.B. neue Abkürzungen) sind nur dann negativ, wenn sie dem Erwartungshorizont widersprechen.
-
-Du MUSST GENAU EIN JSON-OBJEKT ausgeben, nichts anderes.
-Kein Markdown, keine Backticks, kein zusätzlicher Text.
+- Fachbegriffe, Eigennamen und definierte Bezeichnungen müssen präzise korrekt sein.
+- Korrekte Zusatzinformationen dürfen die Bewertung nicht verschlechtern.
+- Bewerte streng, aber konsistent.
+- Nutze nur die Klassen gut, mittel oder schlecht.
+- Du MUSST GENAU EIN JSON-OBJEKT ausgeben, nichts anderes.
+- Kein Markdown, keine Backticks, kein zusätzlicher Text.
 
 AUSGABE-FELDER (nur diese Keys, exakt):
 {
-  "coverage": "voll|ueberwiegend|teilweise|einzelne|kein_bezug",
-  "term_precision": "korrekt|leicht_ungenau|fehlerhaft_oder_fehlend",
-  "error_level": "keine|klein|einige|dominant",
-  "wissensluecke": "keine|kleine|grosse|erhebliche",
+  "coverage": "gut|mittel|schlecht",
+  "term_precision": "gut|mittel|schlecht",
+  "error_level": "gut|mittel|schlecht",
+  "wissensluecke": "gut|mittel|schlecht",
   "begruendung": "max. 2 Sätze, kurz und konkret"
 }
 
 REGELN ZUR WAHL DER KLASSEN:
 - coverage:
-  - voll: alle Kerninhalte aus Erwartung vorhanden
-  - ueberwiegend: fast alles vorhanden, kleine Lücken
-  - teilweise: einige Kerninhalte fehlen
-  - einzelne: nur wenige Elemente erkennbar
-  - kein_bezug: thematisch verfehlt / kein Bezug
+  - gut: alle oder fast alle Kerninhalte aus dem Erwartungshorizont sind vorhanden
+  - mittel: nur ein Teil der Kerninhalte ist vorhanden
+  - schlecht: inhaltlich weitgehend verfehlt oder kein relevanter Bezug
 - term_precision:
-  - korrekt: Fachbegriffe/Bezeichnungen korrekt
-  - leicht_ungenau: kleine Ungenauigkeiten, aber erkennbar korrekt
-  - fehlerhaft_oder_fehlend: wichtige Begriffe falsch oder fehlen
+  - gut: Fachbegriffe und Bezeichnungen sind korrekt
+  - mittel: kleinere Ungenauigkeiten, aber insgesamt erkennbar richtig
+  - schlecht: wichtige Begriffe fehlen, sind falsch oder irreführend
 - error_level:
-  - keine: keine faktischen Fehler
-  - klein: kleine Fehler/Unschärfen, Kernaussage korrekt
-  - einige: mehrere Fehler oder relevante Fehler
-  - dominant: Fehler dominieren, Aussage überwiegend falsch
+  - gut: keine oder praktisch keine sachlichen Fehler
+  - mittel: einzelne relevante Fehler oder Unschärfen, aber Kernaussage noch erkennbar
+  - schlecht: mehrere oder schwere Fehler, die die Aussage deutlich verfälschen
 - wissensluecke:
-  - keine: Antwort zeigt solides Verständnis, keine erkennbaren Lücken
-  - kleine: Randaspekte fehlen oder sind oberflächlich, Kernverständnis vorhanden
-  - grosse: wesentliche Konzepte fehlen oder werden falsch verstanden
-  - erhebliche: fundamentales Verständnis fehlt, nur Bruchstücke erkennbar
+  - gut: solides Verständnis, keine wesentlichen Lücken
+  - mittel: teilweise Verständnis, aber erkennbare Lücken bei wichtigen Aspekten
+  - schlecht: grundlegendes Verständnis fehlt oder nur Bruchstücke sind erkennbar
 """
 
 # ===== Hilfsfunktionen =====
@@ -124,7 +127,6 @@ def _extract_qa_from_messages(obj: Dict[str, Any]) -> Tuple[str, str]:
 
 
 def _first_json_object(text: str) -> Optional[str]:
-    # minimal robust: nimm vom ersten "{" bis zum letzten "}"
     if not text:
         return None
     start = text.find("{")
@@ -137,49 +139,39 @@ def _first_json_object(text: str) -> Optional[str]:
 def _safe_json_loads(s: str) -> Optional[Dict[str, Any]]:
     try:
         obj = json.loads(s)
-        if isinstance(obj, dict):
-            return obj
-        return None
+        return obj if isinstance(obj, dict) else None
     except Exception:
         return None
 
 
 def map_judge_to_note(j: Dict[str, Any]) -> Tuple[int, int]:
-    # Punktetabellen für die Klassifikationen
-    COVERAGE_POINTS = {
-        "voll": 5, "ueberwiegend": 4, "teilweise": 3, "einzelne": 2, "kein_bezug": 0
-    }
-    TERM_POINTS = {
-        "korrekt": 5, "leicht_ungenau": 3, "fehlerhaft_oder_fehlend": 0
-    }
-    ERROR_POINTS = {
-        "keine": 5, "klein": 3, "einige": 1, "dominant": 0
-    }
-    WISS_POINTS = {
-        "keine": 5, "kleine": 3, "grosse": 1, "erhebliche": 0
+    LEVEL_POINTS = {
+        "gut": 5,
+        "mittel": 3,
+        "schlecht": 0,
     }
 
-    coverage = j.get("coverage", "kein_bezug")
-    term_precision = j.get("term_precision", "fehlerhaft_oder_fehlend")
-    error_level = j.get("error_level", "dominant")
-    wissensluecke = j.get("wissensluecke", "erhebliche")
+    coverage = j.get("coverage", "schlecht")
+    term_precision = j.get("term_precision", "schlecht")
+    error_level = j.get("error_level", "schlecht")
+    wissensluecke = j.get("wissensluecke", "schlecht")
 
-    # Wenn kein Bezug: direkt 0 Punkte / Note 6
-    if coverage == "kein_bezug":
-        return 6, 0
-
-    c = COVERAGE_POINTS.get(coverage, 0)
-    t = TERM_POINTS.get(term_precision, 0)
-    e = ERROR_POINTS.get(error_level, 0)
-    w = WISS_POINTS.get(wissensluecke, 0)
+    c = LEVEL_POINTS.get(coverage, 0)
+    t = LEVEL_POINTS.get(term_precision, 0)
+    e = LEVEL_POINTS.get(error_level, 0)
+    w = LEVEL_POINTS.get(wissensluecke, 0)
 
     total = c + t + e + w
-    total_max = 5 + 5 + 5 + 5
 
-    punkte = int(round((total / total_max) * 5))
-    punkte = max(0, min(5, punkte))
+    if total >= 16:
+        punkte = 5
+    elif total >= 8:
+        punkte = 3
+    else:
+        punkte = 0
 
     note = 6 - punkte
+    
     return note, punkte
 
 
@@ -188,7 +180,11 @@ def generate_candidate_answer(model, tokenizer, question: str) -> str:
         {"role": "system", "content": CANDIDATE_SYSTEM},
         {"role": "user", "content": question},
     ]
-    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True
+    )
     inputs = tokenizer(prompt, return_tensors="pt")
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
     prompt_len = inputs["input_ids"].shape[1]
@@ -208,8 +204,13 @@ def generate_candidate_answer(model, tokenizer, question: str) -> str:
     return ans if ans else "(keine Antwort generiert)"
 
 
-def judge_answer(judge_model, judge_tokenizer, question: str, expected: str, candidate: str) -> Tuple[str, Dict[str, Any], int, int]:
-    # Judge sieht: Frage + Erwartung + Modellantwort
+def judge_answer(
+    judge_model,
+    judge_tokenizer,
+    question: str,
+    expected: str,
+    candidate: str
+) -> Tuple[str, Dict[str, Any], int, int]:
     user_payload = (
         f"FRAGE:\n{question}\n\n"
         f"ERWARTUNGSHORIZONT (Ground Truth):\n{expected}\n\n"
@@ -221,7 +222,11 @@ def judge_answer(judge_model, judge_tokenizer, question: str, expected: str, can
         {"role": "user", "content": user_payload},
     ]
 
-    prompt = judge_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    prompt = judge_tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True
+    )
     inputs = judge_tokenizer(prompt, return_tensors="pt")
     inputs = {k: v.to(judge_model.device) for k, v in inputs.items()}
     prompt_len = inputs["input_ids"].shape[1]
@@ -243,40 +248,185 @@ def judge_answer(judge_model, judge_tokenizer, question: str, expected: str, can
     parsed = _safe_json_loads(js)
 
     if parsed is None:
-        # Fallback: maximal streng => Note 6
         parsed = {
-            "coverage": "kein_bezug",
-        "term_precision": "fehlerhaft_oder_fehlend",
-        "error_level": "dominant",
-        "wissensluecke": "erhebliche",
-        "begruendung": "Judge-Ausgabe war kein gültiges JSON.",
+            "coverage": "schlecht",
+            "term_precision": "schlecht",
+            "error_level": "schlecht",
+            "wissensluecke": "schlecht",
+            "begruendung": "Judge-Ausgabe war kein gültiges JSON.",
         }
 
     note, punkte = map_judge_to_note(parsed)
     return raw, parsed, note, punkte
 
 
-# ===== Laden der Modelle =====
-print("🚀 Lade Candidate (Base + LoRA) ...")
-cand_tokenizer = AutoTokenizer.from_pretrained(CANDIDATE_LORA_PATH, local_files_only=True, use_fast=True)
-if cand_tokenizer.pad_token is None:
-    cand_tokenizer.pad_token = cand_tokenizer.eos_token
+def append_model_result(
+    fout,
+    flog,
+    tax_name: str,
+    idx: int,
+    model_name: str,
+    question: str,
+    expected: str,
+    candidate: str,
+    raw: str,
+    parsed: Dict[str, Any],
+    note: int,
+    punkte: int
+) -> None:
+    record = {
+        "taxonomie": tax_name,
+        "index": idx,
+        "model": model_name,
+        "question": question,
+        "expected": expected,
+        "candidate": candidate,
+        "judge_raw": raw,
+        "judge": parsed,
+        "note": note,
+        "punkte": punkte,
+    }
+    fout.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-candidate_model = Mistral3ForConditionalGeneration.from_pretrained(
+    log_rec = {
+        "taxonomie": tax_name,
+        "index": idx,
+        "model": model_name,
+        "note": note,
+        "punkte": punkte,
+        "coverage": parsed.get("coverage"),
+        "term_precision": parsed.get("term_precision"),
+        "error_level": parsed.get("error_level"),
+        "wissensluecke": parsed.get("wissensluecke"),
+    }
+    flog.write(json.dumps(log_rec, ensure_ascii=False) + "\n")
+
+
+def plot_taxonomy_question_curves(
+    tax_name: str,
+    base_points: List[int],
+    ft_points: List[int],
+) -> None:
+    x_base = list(range(1, len(base_points) + 1))
+    x_ft = list(range(1, len(ft_points) + 1))
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(x_base, base_points, marker="o", label="Base")
+    plt.plot(x_ft, ft_points, marker="o", label="Fine-Tuned")
+    plt.xlabel("Frage-Index")
+    plt.ylabel("Punkte")
+    plt.title(f"Punkte-Verlauf pro Frage - {tax_name}")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOT_DIR, f"{tax_name}_points_curve.png"), dpi=150)
+    plt.close()
+
+
+def plot_taxonomy_averages(summary: Dict[str, Any]) -> None:
+    taxonomies = [
+        tax for tax in summary["base_model"].keys()
+        if summary["base_model"][tax]["avg_punkte"] is not None
+        and summary["fine_tuned_model"][tax]["avg_punkte"] is not None
+    ]
+
+    if not taxonomies:
+        return
+
+    base_avg_points = [
+        summary["base_model"][tax]["avg_punkte"] for tax in taxonomies
+    ]
+    ft_avg_points = [
+        summary["fine_tuned_model"][tax]["avg_punkte"] for tax in taxonomies
+    ]
+
+    x = list(range(len(taxonomies)))
+    width = 0.35
+
+    plt.figure(figsize=(12, 6))
+    plt.bar([i - width / 2 for i in x], base_avg_points, width=width, label="Base")
+    plt.bar([i + width / 2 for i in x], ft_avg_points, width=width, label="Fine-Tuned")
+    plt.xticks(x, taxonomies, rotation=45, ha="right")
+    plt.ylabel("Durchschnittspunkte")
+    plt.title("Durchschnittspunkte pro Taxonomie")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOT_DIR, "taxonomy_avg_points.png"), dpi=150)
+    plt.close()
+
+def plot_overall_results(summary: Dict[str, Any]) -> None:
+    labels = ["Base", "Fine-Tuned"]
+    avg_points = [
+        summary["gesamt"]["base_model"]["avg_punkte"],
+        summary["gesamt"]["fine_tuned_model"]["avg_punkte"],
+    ]
+
+    if any(v is None for v in avg_points):
+        return
+
+    plt.figure(figsize=(8, 5))
+    plt.bar(labels, avg_points)
+    plt.ylabel("Durchschnittspunkte")
+    plt.title("Gesamtergebnisse - Durchschnittspunkte")
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOT_DIR, "overall_avg_points.png"), dpi=150)
+    plt.close()
+
+
+# ===== Modelle laden =====
+print("🚀 Lade Candidate Base-only ...")
+base_tokenizer = AutoTokenizer.from_pretrained(
+    CANDIDATE_BASE_MODEL_PATH,
+    local_files_only=True,
+    use_fast=True,
+    trust_remote_code=True,
+)
+if base_tokenizer.pad_token is None:
+    base_tokenizer.pad_token = base_tokenizer.eos_token
+
+base_model = Mistral3ForConditionalGeneration.from_pretrained(
     CANDIDATE_BASE_MODEL_PATH,
     device_map={"": 0} if torch.cuda.is_available() else None,
     torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
     local_files_only=True,
     trust_remote_code=True,
 )
-candidate_model = PeftModel.from_pretrained(candidate_model, CANDIDATE_LORA_PATH, local_files_only=True)
-candidate_model.eval()
+base_model.eval()
 if not torch.cuda.is_available():
-    candidate_model.to("cpu")
+    base_model.to("cpu")
+
+print("🚀 Lade Candidate Fine-Tuned (Base + LoRA) ...")
+ft_tokenizer = AutoTokenizer.from_pretrained(
+    CANDIDATE_LORA_PATH,
+    local_files_only=True,
+    use_fast=True,
+)
+if ft_tokenizer.pad_token is None:
+    ft_tokenizer.pad_token = ft_tokenizer.eos_token
+
+ft_model = Mistral3ForConditionalGeneration.from_pretrained(
+    CANDIDATE_BASE_MODEL_PATH,
+    device_map={"": 0} if torch.cuda.is_available() else None,
+    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+    local_files_only=True,
+    trust_remote_code=True,
+)
+ft_model = PeftModel.from_pretrained(
+    ft_model,
+    CANDIDATE_LORA_PATH,
+    local_files_only=True
+)
+ft_model.eval()
+if not torch.cuda.is_available():
+    ft_model.to("cpu")
 
 print("🚀 Lade Judge (ohne LoRA) ...")
-#judge_tokenizer = AutoTokenizer.from_pretrained(JUDGE_MODEL_PATH, local_files_only=True, use_fast=True)
-judge_tokenizer = AutoTokenizer.from_pretrained(JUDGE_MODEL_PATH, local_files_only=True, use_fast=True, trust_remote_code=True)
+judge_tokenizer = AutoTokenizer.from_pretrained(
+    JUDGE_MODEL_PATH,
+    local_files_only=True,
+    use_fast=True,
+    trust_remote_code=True,
+)
 if judge_tokenizer.pad_token is None:
     judge_tokenizer.pad_token = judge_tokenizer.eos_token
 
@@ -287,32 +437,50 @@ judge_model = AutoModelForCausalLM.from_pretrained(
     local_files_only=True,
     trust_remote_code=True,
 )
-
 judge_model.eval()
 if not torch.cuda.is_available():
     judge_model.to("cpu")
 
 print("✅ Modelle geladen.\n")
 
-# ===== Main: alle Taxonomie-JSONL bewerten =====
-summary: Dict[str, Any] = {}
+# ===== Main =====
+summary: Dict[str, Any] = {
+    "base_model": {},
+    "fine_tuned_model": {},
+    "vergleich": {}
+}
+
 paths = sorted(glob.glob(os.path.join(TEST_DIR, "*.jsonl")))
 
 if not paths:
     raise SystemExit(f"❌ Keine .jsonl Dateien gefunden in: {TEST_DIR}")
 
+all_base_notes: List[int] = []
+all_base_points: List[int] = []
+all_ft_notes: List[int] = []
+all_ft_points: List[int] = []
+
 for fp in paths:
     tax_name = os.path.splitext(os.path.basename(fp))[0]
-    out_path = os.path.join(OUT_DIR, f"{tax_name}_judge.jsonl")
-    log_path = os.path.join(LOG_DIR, f"{tax_name}_scores.jsonl")
 
-    notes: List[int] = []
-    points: List[int] = []
+    out_base_path = os.path.join(OUT_DIR, f"{tax_name}_judge_base.jsonl")
+    out_ft_path = os.path.join(OUT_DIR, f"{tax_name}_judge_ft.jsonl")
+
+    log_base_path = os.path.join(LOG_DIR, f"{tax_name}_scores_base.jsonl")
+    log_ft_path = os.path.join(LOG_DIR, f"{tax_name}_scores_ft.jsonl")
+
+    base_notes: List[int] = []
+    base_points: List[int] = []
+    ft_notes: List[int] = []
+    ft_points: List[int] = []
 
     print(f"=== Bewertet: {tax_name} ===")
+
     with open(fp, "r", encoding="utf-8") as fin, \
-         open(out_path, "w", encoding="utf-8") as fout, \
-         open(log_path, "w", encoding="utf-8") as flog:
+         open(out_base_path, "w", encoding="utf-8") as fout_base, \
+         open(out_ft_path, "w", encoding="utf-8") as fout_ft, \
+         open(log_base_path, "w", encoding="utf-8") as flog_base, \
+         open(log_ft_path, "w", encoding="utf-8") as flog_ft:
 
         for idx, line in enumerate(fin, 1):
             line = line.strip()
@@ -322,69 +490,162 @@ for fp in paths:
             try:
                 obj = json.loads(line)
             except Exception:
-                # skip kaputte Zeile
                 continue
 
             question, expected = _extract_qa_from_messages(obj)
             if not question:
                 continue
 
-            # 1) Candidate generieren
-            candidate = generate_candidate_answer(candidate_model, cand_tokenizer, question)
+            # ===== Base Model =====
+            candidate_base = generate_candidate_answer(base_model, base_tokenizer, question)
+            raw_base, parsed_base, note_base, punkte_base = judge_answer(
+                judge_model,
+                judge_tokenizer,
+                question,
+                expected,
+                candidate_base
+            )
 
-            # 2) Judge bewerten (JSON-only)
-            raw, parsed, note, punkte = judge_answer(judge_model, judge_tokenizer, question, expected, candidate)
+            append_model_result(
+                fout_base,
+                flog_base,
+                tax_name,
+                idx,
+                "base",
+                question,
+                expected,
+                candidate_base,
+                raw_base,
+                parsed_base,
+                note_base,
+                punkte_base
+            )
 
-            notes.append(note)
-            points.append(punkte)
+            base_notes.append(note_base)
+            base_points.append(punkte_base)
+            all_base_notes.append(note_base)
+            all_base_points.append(punkte_base)
 
-            record = {
-                "taxonomie": tax_name,
-                "index": idx,
-                "question": question,
-                "expected": expected,
-                "candidate": candidate,
-                "judge_raw": raw,
-                "judge": parsed,
-                "note": note,
-                "punkte": punkte,
-            }
-            fout.write(json.dumps(record, ensure_ascii=False) + "\n")
+            # ===== Fine-Tuned Model =====
+            candidate_ft = generate_candidate_answer(ft_model, ft_tokenizer, question)
+            raw_ft, parsed_ft, note_ft, punkte_ft = judge_answer(
+                judge_model,
+                judge_tokenizer,
+                question,
+                expected,
+                candidate_ft
+            )
 
-            # kompakter Log (Score pro Frage)
-            log_rec = {
-                "taxonomie": tax_name,
-                "index": idx,
-                "note": note,
-                "punkte": punkte,
-                "coverage": parsed.get("coverage"),
-                "term_precision": parsed.get("term_precision"),
-                "error_level": parsed.get("error_level"),
-                "wissensluecke": parsed.get("wissensluecke"),
-            }
-            flog.write(json.dumps(log_rec, ensure_ascii=False) + "\n")
+            append_model_result(
+                fout_ft,
+                flog_ft,
+                tax_name,
+                idx,
+                "fine_tuned",
+                question,
+                expected,
+                candidate_ft,
+                raw_ft,
+                parsed_ft,
+                note_ft,
+                punkte_ft
+            )
 
-    n = len(notes)
-    avg_note = sum(notes) / n if n else None
-    avg_points = sum(points) / n if n else None
+            ft_notes.append(note_ft)
+            ft_points.append(punkte_ft)
+            all_ft_notes.append(note_ft)
+            all_ft_points.append(punkte_ft)
 
-    summary[tax_name] = {
-        "count": n,
-        "avg_note": avg_note,
-        "avg_punkte": avg_points,
-        "out_file": out_path,
-        "log_file": log_path,
+    n_base = len(base_notes)
+    n_ft = len(ft_notes)
+
+    avg_base_note = sum(base_notes) / n_base if n_base else None
+    avg_base_points = sum(base_points) / n_base if n_base else None
+
+    avg_ft_note = sum(ft_notes) / n_ft if n_ft else None
+    avg_ft_points = sum(ft_points) / n_ft if n_ft else None
+
+    summary["base_model"][tax_name] = {
+        "count": n_base,
+        "avg_note": avg_base_note,
+        "avg_punkte": avg_base_points,
+        "out_file": out_base_path,
+        "log_file": log_base_path,
     }
 
-    if avg_note is None:
-        print("❌ Keine gültigen Beispiele gefunden.\n")
-    else:
-        print(f"✔ count={n} | avg_note={avg_note:.3f} | avg_punkte={avg_points:.3f}\n")
+    summary["fine_tuned_model"][tax_name] = {
+        "count": n_ft,
+        "avg_note": avg_ft_note,
+        "avg_punkte": avg_ft_points,
+        "out_file": out_ft_path,
+        "log_file": log_ft_path,
+    }
 
-# Summary schreiben
+    if avg_base_points is not None and avg_ft_points is not None:
+        summary["vergleich"][tax_name] = {
+            "delta_punkte_ft_minus_base": avg_ft_points - avg_base_points,
+            "besseres_modell_punkte": (
+                "fine_tuned" if avg_ft_points > avg_base_points
+                else "base" if avg_base_points > avg_ft_points
+                else "gleich"
+            ),
+        }
+
+        plot_taxonomy_question_curves(
+            tax_name=tax_name,
+            base_points=base_points,
+            ft_points=ft_points,
+        )
+
+        print(
+            f"✔ base: count={n_base} | avg_punkte={avg_base_points:.3f}"
+        )
+        print(
+            f"✔ ft:   count={n_ft} | avg_punkte={avg_ft_points:.3f}"
+        )
+        print(
+            f"✔ delta(ft-base): punkte={avg_ft_points - avg_base_points:.3f}\n"
+        )
+    else:
+        print("❌ Keine gültigen Beispiele gefunden.\n")
+
+# ===== Gesamtauswertung =====
+global_base_count = len(all_base_points)
+global_ft_count = len(all_ft_points)
+
+global_base_avg_points = sum(all_base_points) / global_base_count if global_base_count else None
+global_ft_avg_points = sum(all_ft_points) / global_ft_count if global_ft_count else None
+
+summary["gesamt"] = {
+    "base_model": {
+        "count": global_base_count,
+        "avg_punkte": global_base_avg_points,
+    },
+    "fine_tuned_model": {
+        "count": global_ft_count,
+        "avg_punkte": global_ft_avg_points,
+    },
+    "vergleich": {
+        "delta_punkte_ft_minus_base": (
+            global_ft_avg_points - global_base_avg_points
+            if global_ft_avg_points is not None and global_base_avg_points is not None
+            else None
+        ),
+        "besseres_modell_punkte": (
+            "fine_tuned" if global_ft_avg_points is not None and global_base_avg_points is not None and global_ft_avg_points > global_base_avg_points
+            else "base" if global_ft_avg_points is not None and global_base_avg_points is not None and global_base_avg_points > global_ft_avg_points
+            else "gleich"
+        ),
+    }
+}
+
+# ===== Summary schreiben =====
 summary_path = os.path.join(OUT_DIR, "summary.json")
 with open(summary_path, "w", encoding="utf-8") as f:
     json.dump(summary, f, ensure_ascii=False, indent=2)
+
+plot_taxonomy_averages(summary)
+plot_overall_results(summary)
 
 print("✅ Fertig.")
 print("Summary:", summary_path)
